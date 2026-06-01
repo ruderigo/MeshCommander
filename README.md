@@ -72,12 +72,19 @@ Launcher (MeshCommander.sh):
 export SDL_VIDEODRIVER=offscreen
 export SDL_NOMOUSE=1
 
-🎮 5. Button Map (R36S / GO-Super)
+🎮 5. Button Map 
+(R36S / GO-Super)
+
 START: Cycle panels
+
 SELECT: Toggle transport
+
 A: Confirm / add char
+
 B: Delete / back
+
 Y: Send message
+
 D-pad: Navigate / scroll
 
 Notes
