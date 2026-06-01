@@ -15,21 +15,27 @@ Powered USB-Hub
 MeshCommander turns your handheld into a node in a self-healing mesh. To keep the system lightweight for ArkOS, MeshCommander renders directly to /dev/fb0.
 
 📦 1. Dependencies
+
 pip install RNS pygame numpy
 
 ⚙️ 2. Reticulum Config
+
 File location: ~/.reticulum/config
 
 [reticulum]
+
 enable_transport = False
 share_instance = Yes
 instance_name = default
 
 [logging]
+
 loglevel = 4
 
 [interfaces]
+
 [[Heltec_LoRa]]
+
 type = RNodeInterface
 interface_enabled = True
 port = /dev/ttyUSB0
@@ -40,24 +46,31 @@ spreadingfactor = 8
 codingrate = 5
 
 🛠️ 3. Permissions & Hardware
+
 sudo usermod -a -G dialout $USER
+
 sudo chmod 666 /dev/ttyUSB0
 
 Flash RNode firmware:
+
 pip install rns rnodeconf
 rnodeconf --autoinstall
 
 📂 4. Deploy MeshCommander
+
 cp MeshCommander.py /roms/ports/
+
 cp MeshCommander.sh /roms/ports/
+
 chmod +x /roms/ports/MeshCommander.sh
+
 chmod +x /roms/ports/MeshCommander.py
 
 Launcher (MeshCommander.sh):
+
 #!/bin/bash
 export SDL_VIDEODRIVER=offscreen
 export SDL_NOMOUSE=1
-python3 /roms/ports/MeshCommander.py
 
 🎮 5. Button Map (R36S / GO-Super)
 START: Cycle panels
