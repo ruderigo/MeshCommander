@@ -158,7 +158,14 @@ class MeshNode:
             _sig.signal    = lambda *a, **kw: None
             self.reticulum = RNS.Reticulum()
             _sig.signal    = _orig_signal
-            self.identity  = RNS.Identity()
+
+            # Persist identity so our hash stays the same across restarts
+            id_path = os.path.expanduser("~/.reticulum/meshcmd_identity")
+            if os.path.exists(id_path):
+                self.identity = RNS.Identity.from_file(id_path)
+            else:
+                self.identity = RNS.Identity()
+                self.identity.to_file(id_path)
             self.dest = RNS.Destination(
                 self.identity,
                 RNS.Destination.IN,
@@ -186,6 +193,7 @@ class MeshNode:
         link.set_packet_callback(self._on_packet)
         link.set_resource_callback(lambda r: r.accept())
         link.set_link_closed_callback(self._link_closed)
+        link.identify(self.identity)   # tell the remote who we are
         with self._lock:
             self.link_state = "LINKED"
 
@@ -206,11 +214,12 @@ class MeshNode:
     def _on_packet(self, message: bytes, packet: RNS.Packet):
         text = message.decode("utf-8", errors="replace")
         try:
-            sender_hash  = RNS.prettyhexrep(packet.link.remote_identity.hash)
-            sender_label = self._peer_name(sender_hash)
+            remote_id    = packet.link.remote_identity
+            sender_hash  = RNS.prettyhexrep(remote_id.hash) if remote_id else None
+            sender_label = self._peer_name(sender_hash) if sender_hash else "unknown"
         except Exception:
-            sender_hash  = RNS.prettyhexrep(packet.destination_hash)
-            sender_label = sender_hash[:8]
+            sender_hash  = None
+            sender_label = "unknown"
         with self._lock:
             self.inbox.append((time.strftime("%H:%M"), sender_label, text, sender_hash))
             self.has_unread = True
@@ -290,6 +299,7 @@ class MeshNode:
         link.set_packet_callback(self._on_packet)
         link.set_resource_callback(lambda r: r.accept())
         link.set_link_closed_callback(self._link_closed)
+        link.identify(self.identity)   # tell the remote who we are
         with self._lock:
             self.link_state = "LINKED"
             if peer_hash in self.peers:
@@ -546,43 +556,25 @@ class Renderer:
                      W // 2, H - BOTBAR - 20, ACCENT, "sm", anchor="midtop")
 
     # ── COMPOSE panel ────────────────────────────────────────────────────
-    def draw_compose(self, draft, cursor_pos, peer_name, blink):
+    def draw_compose(self, draft, peer_name, blink):
         y = CONTENT_Y
 
         tc = ACCENT if peer_name else WARN
         tt = f"TO: {peer_name}" if peer_name else "TO: none — go to PEERS first"
-        self.txt(tt, PADX, y, tc, "sm"); y += 20
+        self.txt(tt, PADX, y, tc, "sm"); y += 24
 
-        self.outlined_rect(PADX, y, W - PADX * 2, 82, PANEL, ACCENT, r=6)
-        display  = draft + ("_" if blink else " ")
-        chars_ln = 50
+        # Text input box
+        self.outlined_rect(PADX, y, W - PADX * 2, 100, PANEL, ACCENT, r=6)
+        self.txt("MESSAGE", PADX + 10, y + 6, DIM, "sm")
+        display  = draft + ("█" if blink else " ")
+        chars_ln = 60
         lines    = [display[i:i + chars_ln] for i in range(0, max(len(display), 1), chars_ln)]
         for i, ln in enumerate(lines[:4]):
-            self.txt(ln, PADX + 10, y + 8 + i * 18, TEXT, "mono")
-        y += 90
+            self.txt(ln, PADX + 10, y + 22 + i * 18, TEXT, "mono")
+        y += 110
 
-        self.txt("PICK:  ◄► char   ▲▼ row   [Enter] add   [Bksp] del   [y] SEND",
-                 PADX, y, DIM, "sm"); y += 20
-
-        cur_row   = cursor_pos // COLS
-        start_row = max(0, cur_row - 1)
-        char_w    = (W - PADX * 2) // COLS
-
-        for r in range(start_row, start_row + 5):
-            for col in range(COLS):
-                i = r * COLS + col
-                if i >= len(CHARSET):
-                    break
-                ch = CHARSET[i]
-                cx = PADX + col * char_w
-                cy = y + (r - start_row) * 28
-                if cy > H - BOTBAR - 30:
-                    break
-                if i == cursor_pos:
-                    self.filled_rect(cx, cy, char_w - 1, 26, ACCENT, r=3)
-                    self.txt(ch, cx + char_w // 2, cy + 4, BG, "mono", anchor="midtop")
-                else:
-                    self.txt(ch, cx + char_w // 2, cy + 4, TEXT, "mono", anchor="midtop")
+        self.txt(f"{len(draft)} chars  —  just type your message, Enter to send",
+                 PADX, y, DIM, "sm")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -639,7 +631,7 @@ def main():
         PANEL_STATUS:   [("Tab/]", "next panel"), ("◄►", "transport"), ("F1", "announce"), ("Esc", "quit")],
         PANEL_MESSAGES: [("↕", "scroll"), ("PgUp/Dn", "page"), ("F1", "announce"), ("F3", "compose")],
         PANEL_PEERS:    [("↕", "move"), ("F3", "select"), ("F2", "★ friend")],
-        PANEL_COMPOSE:  [("◄►▲▼", "char"), ("F4", "add char"), ("Bksp", "del"), ("F5", "SEND")],
+        PANEL_COMPOSE:  [("type", "message"), ("Bksp", "del"), ("Enter/F5", "SEND")],
     }
 
     clock   = pygame.time.Clock()
@@ -720,16 +712,14 @@ def main():
                             node.has_unread = True
 
                 elif active_panel == PANEL_COMPOSE:
-                    if k == pygame.K_LEFT:
-                        compose_cursor = max(0, compose_cursor - 1)
-                    elif k == pygame.K_RIGHT:
-                        compose_cursor = min(len(CHARSET) - 1, compose_cursor + 1)
-                    elif k == pygame.K_UP:
-                        compose_cursor = max(0, compose_cursor - COLS)
-                    elif k == pygame.K_DOWN:
-                        compose_cursor = min(len(CHARSET) - 1, compose_cursor + COLS)
-                    elif k == pygame.K_F4:
-                        compose_draft += CHARSET[compose_cursor]
+                    if k == pygame.K_RETURN or k == pygame.K_KP_ENTER:
+                        # Enter sends
+                        if compose_draft.strip() and selected_peer_hash:
+                            node.send_to(selected_peer_hash, compose_draft.strip())
+                            compose_draft = ""
+                            active_panel  = PANEL_MESSAGES
+                            msg_scroll    = 0
+                            node.clear_unread()
                     elif k == pygame.K_BACKSPACE:
                         if compose_draft:
                             compose_draft = compose_draft[:-1]
@@ -742,6 +732,8 @@ def main():
                             active_panel  = PANEL_MESSAGES
                             msg_scroll    = 0
                             node.clear_unread()
+                    elif event.unicode and event.unicode.isprintable():
+                        compose_draft += event.unicode
 
         # ── Draw ──────────────────────────────────────────────────────────
         screen.fill(BG)
@@ -758,7 +750,7 @@ def main():
             if selected_peer_hash:
                 with node._lock:
                     peer_name = node.peers.get(selected_peer_hash, {}).get("name")
-            renderer.draw_compose(compose_draft, compose_cursor, peer_name, blink)
+            renderer.draw_compose(compose_draft, peer_name, blink)
 
         renderer.draw_botbar(HINTS[active_panel])
         pygame.display.flip()
