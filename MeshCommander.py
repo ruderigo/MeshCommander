@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MeshCommander v5 — R36S Mesh Communicator
+MeshCommander v4 — R36S Mesh Communicator
 Framebuffer UI (no X required). LoRa transport via Heltec V3 RNode.
 
 Button map (GO-Super Gamepad / R36S, all keycodes verified):
@@ -8,10 +8,10 @@ Button map (GO-Super Gamepad / R36S, all keycodes verified):
   SELECT  (704) — press then START within 2s = exit to ES
   A       (304) — confirm / add char / select peer
   B       (305) — delete / back
-  Y       (308) — announce to mesh (STATUS/MESSAGES) | save friend (PEERS)
+  X       (308) — announce to mesh (STATUS/MESSAGES) | save friend (PEERS)
   SELECT  (704) — press then START within 2s = exit to ES
   D-pad ◄► — cycle transport on STATUS panel
-  X       (307) — SEND message
+  Y       (307) — SEND message
   L1      (310) — previous panel
   R1      (311) — next panel
   L2      (312) — page up (messages)
@@ -118,6 +118,22 @@ class DirectInput:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+class _AnnounceHandler:
+    """
+    Top-level class so the instance is not garbage-collected.
+    RNS may hold only a weak reference internally; storing it on MeshNode
+    (self._announce_handler) keeps it alive for the lifetime of the node.
+    """
+    aspect_filter = "meshcmd.msg"
+
+    def __init__(self, cb):
+        self.cb = cb
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        self.cb(destination_hash, announced_identity, app_data)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 class MeshNode:
     """
     Reticulum wrapper. All RNS callbacks run in background threads;
@@ -172,13 +188,20 @@ class MeshNode:
         try:
             # Temporarily suppress signal() — RNS tries to register handlers
             # from this background thread which Python disallows.
-            # We restore it immediately after RNS init so other threads aren't affected.
             import signal as _sig
             _orig_signal   = _sig.signal
             _sig.signal    = lambda *a, **kw: None
             self.reticulum = RNS.Reticulum()
             _sig.signal    = _orig_signal  # restore immediately
-            self.identity  = RNS.Identity()
+
+            # Persist identity so our hash stays the same across restarts
+            id_path = os.path.expanduser("~/.reticulum/meshcmd_identity")
+            if os.path.exists(id_path):
+                self.identity = RNS.Identity.from_file(id_path)
+            else:
+                self.identity = RNS.Identity()
+                self.identity.to_file(id_path)
+
             self.dest = RNS.Destination(
                 self.identity,
                 RNS.Destination.IN,
@@ -189,14 +212,8 @@ class MeshNode:
             self.dest.set_proof_strategy(RNS.Destination.PROVE_ALL)
             self.dest.set_link_established_callback(self._link_established)
 
-            # AspectFilter ensures we only receive announces from meshcmd nodes
-            class _AnnounceHandler:
-                aspect_filter = "meshcmd.msg"
-                def __init__(self, cb): self.cb = cb
-                def received_announce(self, dest_hash, announced_identity, app_data):
-                    self.cb(dest_hash, announced_identity, app_data)
-
-            RNS.Transport.register_announce_handler(_AnnounceHandler(self._on_announce))
+            self._announce_handler = _AnnounceHandler(self._on_announce)
+            RNS.Transport.register_announce_handler(self._announce_handler)
             with self._lock:
                 self.link_state = "LISTENING"
             self.dest.announce(app_data=b"R36S")
@@ -212,6 +229,7 @@ class MeshNode:
         link.set_packet_callback(self._on_packet)
         link.set_resource_callback(lambda r: r.accept())
         link.set_link_closed_callback(self._link_closed)
+        link.identify(self.identity)   # tell the remote who we are
         with self._lock:
             self.link_state = "LINKED"
 
@@ -232,11 +250,12 @@ class MeshNode:
     def _on_packet(self, message: bytes, packet: RNS.Packet):
         text = message.decode("utf-8", errors="replace")
         try:
-            sender_hash  = RNS.prettyhexrep(packet.link.remote_identity.hash)
-            sender_label = self._peer_name(sender_hash)
+            remote_id    = packet.link.remote_identity
+            sender_hash  = RNS.prettyhexrep(remote_id.hash) if remote_id else None
+            sender_label = self._peer_name(sender_hash) if sender_hash else "unknown"
         except Exception:
-            sender_hash  = RNS.prettyhexrep(packet.destination_hash)
-            sender_label = sender_hash[:8]
+            sender_hash  = None
+            sender_label = "unknown"
         with self._lock:
             self.inbox.append((time.strftime("%H:%M"), sender_label, text, sender_hash))
             self.has_unread = True
@@ -318,6 +337,7 @@ class MeshNode:
         link.set_packet_callback(self._on_packet)
         link.set_resource_callback(lambda r: r.accept())
         link.set_link_closed_callback(self._link_closed)
+        link.identify(self.identity)   # tell the remote who we are
         with self._lock:
             self.link_state = "LINKED"
             if peer_hash in self.peers:
