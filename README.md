@@ -1,5 +1,8 @@
 # MeshCommander
 
+<img width="2992" height="2992" alt="20260601_130615" src="https://github.com/user-attachments/assets/631748d5-5861-4b9d-8a21-f9764392c531" />
+
+
 A hardware-agnostic TUI for sovereign Reticulum mesh networking on handhelds and LoRa modules.
 
 MeshCommander turns portable gaming hardware into a resilient, off-grid communication terminal. It leverages the Reticulum Network Stack (RNS) to provide encrypted, peer-to-peer messaging without reliance on centralized infrastructure. The UI renders directly to `/dev/fb0` — no X server, no desktop environment required.
